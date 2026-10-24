@@ -1,0 +1,204 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+enum KioskStatus {
+  online
+  offline
+  paused
+}
+
+enum SessionStatus {
+  open
+  in_use
+  completed
+  expired
+  cancelled
+}
+
+enum JobStatus {
+  draft
+  awaiting_payment
+  paid
+  queued
+  printing
+  completed
+  failed
+  cancelled
+  refund_pending
+  refunded
+}
+
+enum PaymentStatus {
+  created
+  pending
+  captured
+  failed
+  refunded
+}
+
+enum PrintStatus {
+  idle
+  rendering
+  queued
+  printing
+  completed
+  failed
+}
+
+enum StaffRole {
+  owner
+  operator
+}
+
+model Kiosk {
+  id          String      @id @default(uuid())
+  name        String
+  location    String
+  secretHash  String      @map("secret_hash")
+  status      KioskStatus @default(online)
+  lastSeenAt  DateTime?   @map("last_seen_at")
+  createdAt   DateTime    @default(now()) @map("created_at")
+  updatedAt   DateTime    @updatedAt @map("updated_at")
+
+  sessions    Session[]
+  jobs        Job[]
+  eventLogs   EventLog[]
+
+  @@map("kiosks")
+}
+
+model Session {
+  id        String        @id @default(uuid())
+  token     String        @unique // 32 bytes random base64url or hex
+  tokenHash String        @unique @map("token_hash")
+  kioskId   String        @map("kiosk_id")
+  status    SessionStatus @default(open)
+  expiresAt DateTime      @map("expires_at")
+  createdAt DateTime      @default(now()) @map("created_at")
+  updatedAt DateTime      @updatedAt @map("updated_at")
+
+  kiosk     Kiosk         @relation(fields: [kioskId], references: [id], onDelete: Cascade)
+  jobs      Job[]
+
+  @@index([tokenHash])
+  @@index([kioskId, status])
+  @@map("sessions")
+}
+
+model Job {
+  id            String        @id @default(uuid())
+  referenceCode String        @unique @map("reference_code") // short 6-char uppercase code for staff & customer
+  sessionId     String        @map("session_id")
+  kioskId       String        @map("kiosk_id")
+  pageRange     String        @default("all") @map("page_range")
+  type          String        @default("paper") // paper, chart, photo_sheet
+  size          String        @default("a4") // a4, a3, a5, letter, legal
+  color         String        @default("bw") // bw, color
+  sides         String        @default("single") // single, duplex
+  pagesPerSheet Int           @default(1) @map("pages_per_sheet")
+  pageCount     Int           @default(1) @map("page_count")
+  copies        Int           @default(1)
+  pricePaise    Int           @default(0) @map("price_paise")
+  currency      String        @default("INR")
+  status        JobStatus     @default(draft)
+  paymentStatus PaymentStatus @default(pending) @map("payment_status")
+  printStatus   PrintStatus   @default(idle) @map("print_status")
+  isPlaceholder Boolean       @default(false) @map("is_placeholder")
+  createdAt     DateTime      @default(now()) @map("created_at")
+  updatedAt     DateTime      @updatedAt @map("updated_at")
+
+  session       Session       @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  kiosk         Kiosk         @relation(fields: [kioskId], references: [id], onDelete: Cascade)
+  files         File[]
+  payments      Payment[]
+  eventLogs     EventLog[]
+
+  @@index([referenceCode])
+  @@index([sessionId])
+  @@index([kioskId, status])
+  @@map("jobs")
+}
+
+model File {
+  id           String   @id @default(uuid())
+  jobId        String   @map("job_id")
+  storageKey   String   @map("storage_key")
+  originalName String   @map("original_name")
+  mimeType     String   @map("mime_type")
+  sizeBytes    Int      @map("size_bytes")
+  pageCount    Int      @map("page_count")
+  sha256       String
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  job          Job      @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@index([jobId])
+  @@map("files")
+}
+
+model Payment {
+  id              String        @id @default(uuid())
+  jobId           String        @map("job_id")
+  provider        String        // razorpay, manual_upi
+  providerOrderId String?       @map("provider_order_id")
+  amountPaise     Int           @map("amount_paise")
+  status          PaymentStatus @default(created)
+  method          String        @default("upi_intent") // upi_intent, manual
+  rawEvent        Json?         @map("raw_event")
+  createdAt       DateTime      @default(now()) @map("created_at")
+  updatedAt       DateTime      @updatedAt @map("updated_at")
+
+  job             Job           @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@index([jobId])
+  @@index([providerOrderId])
+  @@map("payments")
+}
+
+model PricingRule {
+  id          String   @id @default(uuid())
+  optionType  String   @map("option_type") // e.g. base_sheet, photo_surcharge
+  optionValue String   @map("option_value") // e.g. bw_a4, color_a3
+  pricePaise  Int      @map("price_paise")
+  active      Boolean  @default(true)
+  version     Int      @default(1)
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  @@unique([optionType, optionValue, version])
+  @@map("pricing_rules")
+}
+
+model EventLog {
+  id        String   @id @default(uuid())
+  jobId     String?  @map("job_id")
+  kioskId   String?  @map("kiosk_id")
+  eventType String   @map("event_type")
+  payload   Json?
+  createdAt DateTime @default(now()) @map("created_at")
+
+  job       Job?     @relation(fields: [jobId], references: [id], onDelete: SetNull)
+  kiosk     Kiosk?   @relation(fields: [kioskId], references: [id], onDelete: SetNull)
+
+  @@index([jobId])
+  @@index([kioskId])
+  @@index([eventType])
+  @@map("event_logs")
+}
+
+model StaffUser {
+  id           String    @id @default(uuid())
+  email        String    @unique
+  passwordHash String    @map("password_hash")
+  role         StaffRole @default(operator)
+  createdAt    DateTime  @default(now()) @map("created_at")
+  updatedAt    DateTime  @updatedAt @map("updated_at")
+
+  @@map("staff_users")
+}

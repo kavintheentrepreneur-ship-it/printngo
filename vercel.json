@@ -1,0 +1,7 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": "nextjs",
+  "buildCommand": "pnpm --filter @printngo/shared build && pnpm --filter @printngo/customer-web build",
+  "outputDirectory": "apps/customer-web/.next",
+  "installCommand": "pnpm install"
+}
